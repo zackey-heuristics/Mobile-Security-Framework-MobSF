@@ -1,6 +1,7 @@
 # -*- coding: utf_8 -*-
 # flake8: noqa
 """Module for android manifest analysis."""
+import re
 import logging
 from urllib.parse import urlparse
 
@@ -66,6 +67,41 @@ ANDROID_API_LEVEL_MAP = {
     '35': '15',
     '36': '16',
 }
+
+
+def _safe_percent_format(tpl, arg):
+    """
+    Helper for safe '%' formatting.
+    - If no placeholder exists, return the input as-is.
+    - On type mismatch (TypeError), try rescuing by wrapping a single value into a tuple.
+    - As a last resort, fall back to simple replacement to avoid crashing.
+    """
+    if tpl is None:
+        return ""
+    if not isinstance(tpl, str):
+        tpl = str(tpl)
+
+    # '%%' does not materialize into a placeholder; remove it temporarily
+    # and detect any unescaped '%' to decide if placeholders exist.
+    tmp = tpl.replace("%%", "")
+    has_placeholder = ("%s" in tmp) or re.search(r"%\([^)]*\)", tmp)
+    if not has_placeholder:
+        return tpl
+
+    try:
+        return tpl % arg
+    except TypeError:
+        # Rescue for single-value vs. tuple mismatch
+        try:
+            return tpl % ((arg,) if not isinstance(arg, tuple) else arg)
+        except Exception:
+            # Final fallback: simple replacement to keep output readable
+            try:
+                return tpl.replace("%s", str(arg))
+            except Exception:
+                logger.debug("Safe format fallback failed: tpl=%r arg=%r", tpl, arg)
+                return f"{tpl} {arg}"
+
 
 
 def assetlinks_check(act_name, well_knowns):
@@ -798,16 +834,33 @@ def manifest_analysis(app_dic, man_data_dic):
                 if int(value) > 100:
                     ret_list.append(
                         ('high_action_priority_found', (value,), ()))
+        # for a_key, t_name, t_desc in ret_list:
+        #     a_template = android_manifest_desc.MANIFEST_DESC.get(a_key)
+        #     if a_template:
+        #         ret_value.append({
+        #             'rule': a_key,
+        #             'title': a_template['title'] % t_name,
+        #             'severity': a_template['level'],
+        #             'description': a_template['description'] % t_desc,
+        #             'name': a_template['name'] % t_name,
+        #             'component': t_name,
+        #         })
+        #     else:
+        #         logger.warning("No template found for key '%s'", a_key)
         for a_key, t_name, t_desc in ret_list:
             a_template = android_manifest_desc.MANIFEST_DESC.get(a_key)
             if a_template:
+                title_tpl = a_template.get('title', '')
+                desc_tpl  = a_template.get('description', '')
+                name_tpl  = a_template.get('name', '')
+
                 ret_value.append({
                     'rule': a_key,
-                    'title': a_template['title'] % t_name,
-                    'severity': a_template['level'],
-                    'description': a_template['description'] % t_desc,
-                    'name': a_template['name'] % t_name,
-                    'component': t_name,
+                    'title': _safe_percent_format(title_tpl, t_name),
+                    'severity': a_template.get('level', 'info'),
+                    'description': _safe_percent_format(desc_tpl, t_desc),
+                    'name': _safe_percent_format(name_tpl, t_name),
+                    'component': t_name if isinstance(t_name, str) else str(t_name),
                 })
             else:
                 logger.warning("No template found for key '%s'", a_key)
